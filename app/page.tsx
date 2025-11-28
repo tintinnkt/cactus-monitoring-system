@@ -11,66 +11,102 @@ import {
   Power,
   RefreshCw,
   AlertTriangle,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
+import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { db } from "./lib/firebase"; // Import your firebase config
+import { analyzePlantHealth } from "./actions";
 
 // --- Types ---
 interface SensorData {
-  soilMoisture: number; // 0-100%
-  temperature: number; // Celsius
-  humidity: number; // %
-  lightLevel: number; // 0-4095 or 0-100
+  soilMoisture: number;
+  temperature: number;
+  humidity: number;
+  lightLevel: number;
   isPumpOn: boolean;
-  lastUpdated: Date;
+  lastUpdated: any; // Firestore Timestamp
 }
 
 export default function CactusDashboard() {
-  // --- State ---
   const [mounted, setMounted] = useState(false);
-  const [camIp, setCamIp] = useState<string>("192.168.1.100"); // Default ESP32 IP
+  const [camIp, setCamIp] = useState<string>("192.168.1.100");
   const [isStreamActive, setIsStreamActive] = useState(false);
 
-  // Simulated Sensor Data (Replace this with real API calls later)
+  // AI States
+  const [analyzing, setAnalyzing] = useState(false);
+  const [aiResult, setAiResult] = useState<string | null>(null);
+
+  // Default Data
   const [data, setData] = useState<SensorData>({
-    soilMoisture: 45,
-    temperature: 28.5,
-    humidity: 60,
-    lightLevel: 800,
+    soilMoisture: 0,
+    temperature: 0,
+    humidity: 0,
+    lightLevel: 0,
     isPumpOn: false,
-    lastUpdated: new Date(),
+    lastUpdated: null,
   });
 
-  // Hydration fix for Next.js
   useEffect(() => {
     setMounted(true);
-  }, []);
 
-  // --- Mock Data Simulation (Remove this useEffect when connecting real API) ---
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setData((prev) => ({
-        ...prev,
-        soilMoisture: Math.min(
-          100,
-          Math.max(0, prev.soilMoisture + (Math.random() * 4 - 2))
-        ),
-        temperature: parseFloat(
-          (prev.temperature + (Math.random() * 0.4 - 0.2)).toFixed(1)
-        ),
-        lightLevel: Math.max(
-          0,
-          prev.lightLevel + Math.floor(Math.random() * 50 - 25)
-        ),
-        lastUpdated: new Date(),
-      }));
-    }, 3000);
-    return () => clearInterval(interval);
+    // --- REAL FIREBASE CONNECTION ---
+    // Assuming you have a collection "esp32_data" and document "sensors"
+    const unsub = onSnapshot(doc(db, "esp32_data", "sensors"), (doc) => {
+      if (doc.exists()) {
+        const remoteData = doc.data() as SensorData;
+        setData(remoteData);
+      }
+    });
+
+    return () => unsub();
   }, []);
 
   // --- Handlers ---
-  const togglePump = () => {
-    // Here you would send a POST request to your ESP32 or Cloud
-    setData((prev) => ({ ...prev, isPumpOn: !prev.isPumpOn }));
-    console.log("Toggling Pump:", !data.isPumpOn);
+  const togglePump = async () => {
+    try {
+      // Optimistic update (update UI instantly)
+      setData((prev) => ({ ...prev, isPumpOn: !prev.isPumpOn }));
+
+      // Update Firebase (ESP32 will read this)
+      await updateDoc(doc(db, "esp32_data", "sensors"), {
+        isPumpOn: !data.isPumpOn,
+      });
+    } catch (err) {
+      console.error("Error toggling pump:", err);
+    }
+  };
+
+  const handleAIAnalysis = async () => {
+    setAnalyzing(true);
+    setAiResult(null);
+    try {
+      // 1. Fetch image from ESP32 Local IP (Client Side)
+      // Note: Using /capture for high-res still
+      const res = await fetch(`http://${camIp}/capture`);
+      const blob = await res.blob();
+
+      // 2. Convert to Base64
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = async () => {
+        const base64data = reader.result as string;
+
+        // 3. Send to Server Action
+        const result = await analyzePlantHealth(base64data);
+        if (result.success) {
+          setAiResult(result.analysis || "No result text");
+        } else {
+          setAiResult("Error: " + result.error);
+        }
+        setAnalyzing(false);
+      };
+    } catch (e) {
+      setAiResult(
+        "Error: Could not connect to Camera IP. Make sure you are on the same WiFi."
+      );
+      setAnalyzing(false);
+    }
   };
 
   if (!mounted) return null;
@@ -85,23 +121,25 @@ export default function CactusDashboard() {
           </h1>
           <p className="text-neutral-400 text-sm mt-1 flex items-center gap-2">
             <Activity size={14} className="text-green-500" />
-            System Online • Last updated:{" "}
-            {data.lastUpdated.toLocaleTimeString()}
+            System Online • Last Sync:{" "}
+            {data.lastUpdated?.toDate
+              ? data.lastUpdated.toDate().toLocaleTimeString()
+              : "Waiting..."}
           </p>
         </div>
 
+        {/* IP Config */}
         <div className="flex gap-2">
-          {/* Camera IP Input for quick testing */}
           <input
             type="text"
             value={camIp}
             onChange={(e) => setCamIp(e.target.value)}
-            className="bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-300 w-32 focus:outline-none focus:border-green-500 transition-colors"
+            className="bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-300 w-32"
             placeholder="ESP32 IP"
           />
           <button
             onClick={() => window.location.reload()}
-            className="p-2 bg-neutral-800 rounded-lg hover:bg-neutral-700 transition-colors text-neutral-400 hover:text-white"
+            className="p-2 bg-neutral-800 rounded-lg hover:bg-neutral-700 text-neutral-400"
           >
             <RefreshCw size={18} />
           </button>
@@ -109,18 +147,19 @@ export default function CactusDashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Camera Feed */}
+        {/* --- LEFT COL: CAMERA + AI --- */}
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-neutral-900 rounded-2xl border border-neutral-800 overflow-hidden shadow-2xl relative group">
+            {/* Live Label */}
             <div className="absolute top-4 left-4 z-10 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full text-xs font-medium text-white flex items-center gap-2">
               <Video size={12} className="text-red-500 animate-pulse" />
               LIVE FEED
             </div>
 
-            {/* Camera Viewport */}
+            {/* Video Feed */}
             <div className="aspect-video bg-neutral-950 flex items-center justify-center relative">
               {isStreamActive ? (
-                // Use standard MJPEG stream URL pattern for ESP32-CAM
+                // Use built-in Proxy or direct IP if local
                 <img
                   src={`http://${camIp}:81/stream`}
                   alt="Cactus Live Feed"
@@ -129,43 +168,64 @@ export default function CactusDashboard() {
                 />
               ) : (
                 <div className="text-center p-8">
-                  <div className="w-16 h-16 bg-neutral-800 rounded-full flex items-center justify-center mx-auto mb-4 text-neutral-600">
-                    <Video size={32} />
-                  </div>
-                  <p className="text-neutral-400 mb-4">
-                    Stream is currently paused or offline
-                  </p>
+                  <p className="text-neutral-400 mb-4">Stream is paused</p>
                   <button
                     onClick={() => setIsStreamActive(true)}
-                    className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-full font-medium transition-all transform hover:scale-105 active:scale-95"
+                    className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-full font-medium"
                   >
                     Connect Camera
                   </button>
                 </div>
               )}
             </div>
+
+            {/* AI Action Bar */}
+            <div className="p-4 bg-neutral-800/50 border-t border-neutral-800 flex items-center justify-between">
+              <span className="text-sm text-neutral-400">AI Diagnostics</span>
+              <button
+                onClick={handleAIAnalysis}
+                disabled={analyzing}
+                className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-sm font-bold transition-all disabled:opacity-50"
+              >
+                {analyzing ? (
+                  <Loader2 className="animate-spin" size={16} />
+                ) : (
+                  <Sparkles size={16} />
+                )}
+                {analyzing ? "Analyzing..." : "Check Plant Health"}
+              </button>
+            </div>
           </div>
 
-          {/* Alert Banner Example */}
+          {/* AI Result Card (Only shows if result exists) */}
+          {aiResult && (
+            <div className="bg-purple-900/10 border border-purple-500/20 rounded-xl p-6">
+              <h3 className="text-purple-400 font-bold mb-2 flex items-center gap-2">
+                <Sparkles size={18} /> Gemini Assessment
+              </h3>
+              <p className="text-neutral-300 leading-relaxed text-sm">
+                {aiResult}
+              </p>
+            </div>
+          )}
+
+          {/* Low Moisture Alert */}
           {data.soilMoisture < 30 && (
             <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-4">
               <div className="p-2 bg-red-500/20 rounded-lg text-red-500">
                 <AlertTriangle size={20} />
               </div>
               <div>
-                <h3 className="text-red-500 font-medium">
-                  Low Moisture Detected
-                </h3>
+                <h3 className="text-red-500 font-medium">Watering Required</h3>
                 <p className="text-red-400/80 text-sm mt-1">
-                  Soil moisture is below 30%. The system recommends watering
-                  immediately.
+                  Soil moisture is critically low ({data.soilMoisture}%).
                 </p>
               </div>
             </div>
           )}
         </div>
 
-        {/* Right Column: Sensor Data */}
+        {/* --- RIGHT COL: SENSORS --- */}
         <div className="space-y-4">
           {/* Main Moisture Card */}
           <div className="bg-neutral-900 rounded-2xl p-6 border border-neutral-800 relative overflow-hidden">
@@ -177,11 +237,10 @@ export default function CactusDashboard() {
             </h3>
             <div className="flex items-end gap-2 mb-4">
               <span className="text-5xl font-bold text-white">
-                {data.soilMoisture.toFixed(0)}
+                {data.soilMoisture}
               </span>
               <span className="text-xl text-neutral-500 mb-1">%</span>
             </div>
-            {/* Progress Bar */}
             <div className="w-full bg-neutral-800 h-2 rounded-full overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-1000 ${
@@ -192,9 +251,8 @@ export default function CactusDashboard() {
             </div>
           </div>
 
-          {/* Grid for other sensors */}
+          {/* Data Grid */}
           <div className="grid grid-cols-2 gap-4">
-            {/* Temperature */}
             <div className="bg-neutral-900 rounded-2xl p-4 border border-neutral-800">
               <div className="flex items-center gap-2 mb-2 text-orange-400">
                 <Thermometer size={18} />
@@ -205,7 +263,6 @@ export default function CactusDashboard() {
               </p>
             </div>
 
-            {/* Humidity */}
             <div className="bg-neutral-900 rounded-2xl p-4 border border-neutral-800">
               <div className="flex items-center gap-2 mb-2 text-blue-400">
                 <Wind size={18} />
@@ -214,29 +271,24 @@ export default function CactusDashboard() {
               <p className="text-2xl font-bold text-white">{data.humidity}%</p>
             </div>
 
-            {/* Light */}
             <div className="bg-neutral-900 rounded-2xl p-4 border border-neutral-800 col-span-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2 text-yellow-400">
                   <Sun size={18} />
-                  <span className="text-xs font-bold uppercase">
-                    Light Intensity
-                  </span>
+                  <span className="text-xs font-bold uppercase">Light</span>
                 </div>
                 <span className="text-xs text-neutral-500">
-                  {data.lightLevel > 2000 ? "Bright" : "Dim"}
+                  {data.lightLevel > 2000 ? "High" : "Low"}
                 </span>
               </div>
-              <p className="text-2xl font-bold text-white mb-2">
+              <p className="text-2xl font-bold text-white">
                 {data.lightLevel}{" "}
-                <span className="text-sm text-neutral-500 font-normal">
-                  Lux
-                </span>
+                <span className="text-sm text-neutral-500">Lux</span>
               </p>
             </div>
           </div>
 
-          {/* Control Actions */}
+          {/* Pump Control */}
           <div className="bg-neutral-900 rounded-2xl p-6 border border-neutral-800">
             <h3 className="text-neutral-400 text-sm font-medium uppercase tracking-wider mb-4">
               Manual Control
