@@ -2,7 +2,7 @@
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "AIzaSyBJcOi8nddzfqaRqVIitObHpt-18Pm4Z1A");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 export async function analyzePlantHealth(imageUrl: string) {
   try {
@@ -47,7 +47,7 @@ export async function analyzePlantHealth(imageUrl: string) {
 }
 
 export async function getLatestImageFromGAS() {
-  const GAS_URL = "https://script.google.com/macros/s/AKfycbz_qQcyP9eB_oNgGScMcBVKX5GeUyz93wYsFyp4OFjx_XBa2MBb2ReS9vNXDg7mCwHqAw/exec";
+  const GAS_URL = process.env.GAS_URL;
   
   try {
     // Server Fetch ไม่มีปัญหา CORS

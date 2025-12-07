@@ -116,8 +116,17 @@ export default function CactusDashboard() {
   // --- Handlers ---
   const togglePump = async () => {
     try {
-      const newStatus = !data.status.pump_on;
-      await set(ref(db, "status/pump_on"), newStatus);
+      // สลับสถานะ (ถ้าเปิดอยู่ก็ปิด ถ้าปิดอยู่ก็เปิด)
+      // หมายเหตุ: เราดูสถานะจาก pump_on (สถานะจริง) ไม่ได้ ต้องดูจาก control ว่าเราสั่งอะไรไป
+      // ถ้าทำอยู่ -> สั่งปิด, ถ้าดับอยู่ -> สั่งเปิด
+      
+      const command = !data.status.pump_on; // สลับค่า
+      
+      console.log("Sending Command:", command);
+      
+      // เขียนคำสั่งลงไปที่ path: /control/manual_pump
+      await set(ref(db, "control/manual_pump"), command);
+      
     } catch (err) {
       console.error("Error toggling pump:", err);
     }
@@ -300,7 +309,7 @@ export default function CactusDashboard() {
                 <GlassWater size={18} />
                 <span className="text-xs font-bold uppercase">Water Dist.</span>
               </div>
-              <p className="text-2xl font-bold text-white">{data.sensors.water_level_cm} <span className="text-sm text-neutral-500">cm</span></p>
+              <p className="text-2xl font-bold text-white">{((6 - data.sensors.water_level_cm) / 6 * 100).toFixed(2)} <span className="text-sm text-neutral-500">%</span></p>
             </div>
 
             {/* Light */}
